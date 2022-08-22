@@ -1,0 +1,238 @@
+---
+title: "Project"
+author: "Zhe Shao"
+date: "11/26/2021"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r}
+ setwd("/Users/zheshao/Desktop/")
+library(tidyverse)
+wine_quality<-read_csv("winequality-red.csv")
+wine_quality<-wine_quality%>%separate(colnames(wine_quality), c("fixed_acidity", 
+                                                      "volatile_acidity",
+                                                      "citric_acid",
+                                                      "residual_sugar",
+                                                      "chlorides",
+                                                      "free_sulfur_dioxide",
+                                                      "total_sulfur_dioxide",
+                                                      "density",
+                                                      "pH",
+                                                      "sulphates",
+                                                      "alcohol",
+                                                      "quality"),
+                                      convert=TRUE,
+                                      sep=";")
+wine_quality[] <- lapply(wine_quality, function(x) as.numeric(as.character(x)))   #the orginal dataset has character value, we change into numeric
+wine_quality<-wine_quality%>%dplyr::select(quality,everything())  #let response variable be the frist.
+head(wine_quality)
+
+```
+
+
+```{r}
+
+model_naive<-lm(quality~.,data=wine_quality)
+summary(model_naive)    
+plot(model_naive$fitted.values,model_naive$residuals)  # we can see there is downward trend for all different qualities which means it shows nonconstant of error variance.   
+qqnorm(model_naive$residuals)
+qqline(model_naive$residuals) #we can see the residual approximately normal except for the beginning part.
+
+
+
+```
+
+
+```{r}
+# we first find out our naive model is not quite good for our hypothesis:which factors influence our wine quality.
+#we then use stepwise to pick our variables
+
+library(olsrr)
+model <- lm(quality ~ ., data = wine_quality)
+(step_forward <- ols_step_forward_aic(model))
+
+
+best_subset <- ols_step_best_subset(model)
+plot(best_subset) #best subset procedure can also indicates including 7,8 variables well be enough.
+
+```
+```{r}
+#thus our revising model will be 
+model_revised<-lm(quality~alcohol+volatile_acidity+sulphates+total_sulfur_dioxide+chlorides+pH+free_sulfur_dioxide,data=wine_quality)
+summary(model_revised)  #as we can see all varaibles are significant enough, significant ho：bk=0，h1:bk ！=0， we reject ho, because p value so small. 
+
+```
+
+```{r}
+plot(wine_quality$free_sulfur_dioxide,wine_quality$total_sulfur_dioxide) #we can see there is a positive relationship between these two varaibles.
+
+#thus we need to further investigate the VIF, and decide whether we need to drop one of these two varaibles.
+
+library(car)
+car::vif(model)
+
+#as we can see, there is no siginificant VIF for all of the varaibles. Thus we decide to keep both of these variables, because their VIF is small.
+
+```
+
+## scatter plot matrix and various plots ##
+
+
+```{r}
+pairs(wine_quality %>%dplyr::select(quality,alcohol,volatile_acidity,sulphates,total_sulfur_dioxide,chlorides,pH,free_sulfur_dioxide))
+cor(wine_quality %>%dplyr::select(quality,alcohol,volatile_acidity,sulphates,total_sulfur_dioxide,chlorides,pH,free_sulfur_dioxide)) #as we can see the only extreme correlation is between total_sulful_dioxide, and free_sulfur_dioxide,however we consider keep these variables because it is small VIF
+par(mfrow = c(3, 3))
+qqnorm(model_revised$residuals)
+qqline(model_revised$residuals)
+plot(model_revised$fitted.values,model_revised$residuals)
+plot(wine_quality$alcohol,model_revised$residuals)
+plot(wine_quality$volatile_acidity,model_revised$residuals)
+plot(wine_quality$sulphates,model_revised$residuals)
+plot(wine_quality$total_sulfur_dioxide,model_revised$residuals)
+plot(wine_quality$chlorides,model_revised$residuals)
+plot(wine_quality$pH,model_revised$residuals)
+plot(wine_quality$free_sulfur_dioxide,model_revised$residuals)
+
+#thus we can see by the various plots here, we still need to test whether the residual is normal and constant of error variance (because some of these plots show non constant error variance),furthermore these plots also shows some outlier in the data
+
+```
+
+```{r}
+#normal correlation test
+#we can do a normal test to further investigate 
+ord_res=sort(model_revised$residuals,decreasing=FALSE)
+ n=1599
+ MSE=(1/(n-2))*sum((wine_quality$quality-model_revised$fitted.values)^2)
+ est_std=sqrt(MSE)
+ i=1:1599
+ z=qnorm((i-0.375)/(1599+0.25),mean=0,sd=1)
+ exp_val=est_std*z
+ cor(ord_res,exp_val)
+
+#as 0.9956118 is large, so the model is normal
+```
+
+
+```{r}
+#to test nonconstant error varaince
+#we use BP test
+library(lmtest)
+bptest(model_revised,studentize=FALSE)
+
+#we use a=0.05
+qchisq(0.95,7)
+
+72.831>14.06714 # we conclude error variance not constant.
+```
+
+```{r}
+#we use box_cox transformation
+
+library(MASS)
+bc <- boxcox(quality~alcohol+volatile_acidity+sulphates+total_sulfur_dioxide+chlorides+pH+free_sulfur_dioxide,data=wine_quality)
+(lambda <- bc$x[which.max(bc$y)])
+
+model.2<-lm(quality^lambda ~alcohol+volatile_acidity+sulphates+total_sulfur_dioxide+chlorides+pH+free_sulfur_dioxide,data=wine_quality )
+
+bptest(model.2,studentize = FALSE) #although it is still has large constant error variance ,but the transformation did decrease some of the maginitude.
+```
+
+
+
+```{r}
+#then we detect outlier problem
+# we will not detect oulying Y observation, because there quality is categorical variabbles, so it doesn't have outlier
+
+#we need to diagnostic outlying x observation.
+
+lev_value<-hatvalues(model.2)
+p=7
+n=1599
+mean_lev_value<-p/n
+outlier_x<-ifelse(lev_value<=2*mean_lev_value,FALSE,TRUE) #identify outlying x variables
+wine_quality[outlier_x==TRUE,]
+
+
+criteria<-data.frame("DFFITS"=dffits(model.2),
+            "DFBETAS_b0"=dfbetas(model)[,1],
+            "DFBETAS_b1"=dfbetas(model)[,2],
+            "DFBETAS_b2"=dfbetas(model)[,3],
+            "DFBETAS_b3"=dfbetas(model)[,4],
+           "DFBETAS_b4"=dfbetas(model)[,5],
+           "DFBETAS_b5"=dfbetas(model)[,6],
+           "DFBETAS_b6"=dfbetas(model)[,7],
+           "DFBETAS_b7"=dfbetas(model)[,8],
+            "Cook_Distance"=cooks.distance(model.2))
+ cri_for_3<-criteria[which(outlier_x==TRUE),]     #identify whether these outliers are influential
+ 
+ #we use dffits criteria to remove varaibles that are identify as outlier.
+ 
+influential_x_dffits<-ifelse(abs(cri_for_3$DFFITS)<2*sqrt(p/n),FALSE,TRUE)    
+
+wine_quality_revised<-wine_quality[-which(influential_x_dffits==TRUE),]  #remove 53 observations in total by dffits criteria
+
+#this is the total observations keep in our model
+```
+
+
+```{r}
+
+final_model<-lm(quality^lambda ~alcohol+volatile_acidity+sulphates+total_sulfur_dioxide+chlorides+pH+free_sulfur_dioxide,data=wine_quality_revised )
+summary(final_model) #this is our final model
+
+
+par(mfrow = c(3, 3))
+qqnorm(final_model$residuals)
+qqline(final_model$residuals)
+plot(final_model$fitted.values,final_model$residuals)
+plot(wine_quality_revised$alcohol,final_model$residuals)
+plot(wine_quality_revised$volatile_acidity,final_model$residuals)
+plot(wine_quality_revised$sulphates,final_model$residuals)
+plot(wine_quality_revised$total_sulfur_dioxide,final_model$residuals)
+plot(wine_quality_revised$chlorides,final_model$residuals)
+plot(wine_quality_revised$pH,final_model$residuals)
+plot(wine_quality_revised$free_sulfur_dioxide,final_model$residuals)
+```
+
+```{r}
+library(tidyverse)
+#then we validate our data
+ setwd("/Users/zheshao/Desktop/")
+wine_valid<-read_csv("winequality-white.csv")
+
+wine_valid<-wine_valid%>%separate(colnames(wine_valid), c("fixed_acidity", 
+                                                      "volatile_acidity",
+                                                      "citric_acid",
+                                                      "residual_sugar",
+                                                      "chlorides",
+                                                      "free_sulfur_dioxide",
+                                                      "total_sulfur_dioxide",
+                                                      "density",
+                                                      "pH",
+                                                      "sulphates",
+                                                      "alcohol",
+                                                      "quality"),
+                                      convert=TRUE,
+                                      sep=";")
+wine_valid[] <- lapply(wine_valid, function(x) as.numeric(as.character(x)))   
+
+head(wine_valid)
+
+model_valid<-lm(quality^lambda ~alcohol+volatile_acidity+sulphates+total_sulfur_dioxide+chlorides+pH+free_sulfur_dioxide,data=wine_valid )
+summary(model_valid)
+summary(final_model)
+
+matrix.a<-wine_valid%>%dplyr::select(-quality,-fixed_acidity,-density,-residual_sugar,-citric_acid)%>%as.matrix()
+matrix.x<-matrix(c(rep(1,4898),matrix.a),nrow=4898,ncol=8)
+matrix.b<-as.matrix(coefficients(final_model))
+new_fit<-matrix.x%*%matrix.b
+
+(MSPR<-sum((wine_valid$quality-new_fit)^2)/4898)
+
+library(MLmetrics)
+MSE(final_model$fitted.values,wine_quality_revised$quality)
+```
+
+
